@@ -179,6 +179,7 @@ class Sequence(Dataset):
                  num_bins: int = 4, transforms=[], name_idx=0, visualize=False, load_gt=False):
         assert num_bins >= 1
         assert delta_t_ms == 100
+        print(seq_path)
         assert seq_path.is_dir()
         assert mode in {'train', 'test'}
         assert representation_type is not None
@@ -331,7 +332,7 @@ class Sequence(Dataset):
         output['save_submission'] = file_index in self.idx_to_visualize
         output['visualize'] = self.visualize_samples
         event_data = self.event_slicer.get_events(
-            ts_start, ts_end)
+            ts_start, ts_end) # tとt+1を取り出す
         p = event_data['p']
         t = event_data['t']
         x = event_data['x']
@@ -351,7 +352,7 @@ class Sequence(Dataset):
         
         if self.load_gt:
             output['flow_gt'
-                ] = [torch.tensor(x) for x in self.load_flow(self.flow_png[index])]
+                ] = [torch.tensor(x, dtype=torch.float32) for x in self.load_flow(self.flow_png[index])]
 
             output['flow_gt'
                 ][0] = torch.moveaxis(output['flow_gt'][0], -1, 0)
@@ -361,7 +362,7 @@ class Sequence(Dataset):
 
     def __getitem__(self, idx):
         sample = self.get_data(idx)
-        return sample
+        return sample # idx
 
     def get_voxel_grid(self, idx):
 
@@ -525,6 +526,33 @@ class SequenceRecurrent(Sequence):
                                 v, i, j, h, w) for v in value]
         return sequence
 
+# 既存のGCNクラスは存在しないので，自作する.
+class gcn():
+    def __init__(self):
+        pass
+
+    def __call__(self, x):
+        mean = torch.mean(x)
+        std = torch.std(x)
+        return (x - mean)/(std + 10**(-6))  # 0除算を防ぐ
+
+# 標準化後の画像を[0, 1]に正規化する
+def deprocess(x):
+    """
+    Argument
+    --------
+    x : np.ndarray
+        入力画像．(H, W, C)
+
+    Return
+    ------
+    _x : np.ndarray
+        [0, 1]で正規化した画像．(H, W, C)
+    """
+    _min = np.min(x)
+    _max = np.max(x)
+    _x = (x - _min)/(_max - _min)
+    return _x
 
 class DatasetProvider:
     def __init__(self, dataset_path: Path, representation_type: RepresentationType, delta_t_ms: int = 100, num_bins=4,
@@ -536,6 +564,12 @@ class DatasetProvider:
         assert delta_t_ms == 100
         self.config = config
         self.name_mapper_test = []
+
+        GCN = gcn()
+        transform = tf.Compose([tf.RandomHorizontalFlip(p=1.0), 
+                                tf.RandomRotation(degrees=(-180, 180)), 
+                                tf.ToTensor(), 
+                                GCN])
 
         # Assemble test sequences
         test_sequences = list()

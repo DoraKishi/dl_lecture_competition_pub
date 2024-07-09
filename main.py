@@ -6,6 +6,7 @@ import random
 import numpy as np
 from src.models.evflownet import EVFlowNet
 from src.datasets import DatasetProvider
+from torchvision import transforms, datasets
 from enum import Enum, auto
 from src.datasets import train_collate
 from tqdm import tqdm
@@ -28,6 +29,7 @@ def set_seed(seed):
     np.random.seed(seed)
 
 def compute_epe_error(pred_flow: torch.Tensor, gt_flow: torch.Tensor):
+    # ここでflow_dictのやつを足し合わせる？
     '''
     end-point-error (ground truthと予測値の二乗誤差)を計算
     pred_flow: torch.Tensor, Shape: torch.Size([B, 2, 480, 640]) => 予測したオプティカルフローデータ
@@ -44,8 +46,9 @@ def save_optical_flow_to_npy(flow: torch.Tensor, file_name: str):
     '''
     np.save(f"{file_name}.npy", flow.cpu().numpy())
 
-@hydra.main(version_base=None, config_path="configs", config_name="base")
-def main(args: DictConfig):
+
+@hydra.main(version_base=None, config_path="configs", config_name="base") # version_vase: ignore the alert related to version
+def main(args: DictConfig): # set "args" as the information of setting
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     '''
@@ -83,24 +86,28 @@ def main(args: DictConfig):
     train_set = loader.get_train_dataset()
     test_set = loader.get_test_dataset()
     collate_fn = train_collate
+
     train_data = DataLoader(train_set,
-                                 batch_size=args.data_loader.train.batch_size,
-                                 shuffle=args.data_loader.train.shuffle,
-                                 collate_fn=collate_fn,
-                                 drop_last=False)
+                                batch_size=args.data_loader.train.batch_size,
+                                shuffle=args.data_loader.train.shuffle,
+                                collate_fn=collate_fn,
+                                drop_last=False)
     test_data = DataLoader(test_set,
-                                 batch_size=args.data_loader.test.batch_size,
-                                 shuffle=args.data_loader.test.shuffle,
-                                 collate_fn=collate_fn,
-                                 drop_last=False)
+                                batch_size=args.data_loader.test.batch_size,
+                                shuffle=args.data_loader.test.shuffle,
+                                collate_fn=collate_fn,
+                                drop_last=False)
 
     '''
     train data:
         Type of batch: Dict
         Key: seq_name, Type: list
-        Key: event_volume, Type: torch.Tensor, Shape: torch.Size([Batch, 4, 480, 640]) => イベントデータのバッチ
+        Key: event_volume, Type: torch.Tensor, Shape: torch.Size([Batch, 4, 480, 640]) => イベントデータのバッチ (p, t, x, y) -> (実際のイベントの有無, 時間, どのpixelか, どのpixelか) 2バッチを取り出すと、(p, 2, t, x, y)
         Key: flow_gt, Type: torch.Tensor, Shape: torch.Size([Batch, 2, 480, 640]) => オプティカルフローデータのバッチ
         Key: flow_gt_valid_mask, Type: torch.Tensor, Shape: torch.Size([Batch, 1, 480, 640]) => オプティカルフローデータのvalid. ベースラインでは使わない
+        輝度の変化があったのかを記録しているのが今回のデータセット
+        かなりスパースなデータになっている。フィルタは使わない方がいいのでは？
+
     
     test data:
         Type of batch: Dict
@@ -119,7 +126,9 @@ def main(args: DictConfig):
     # ------------------
     #   Start training
     # ------------------
+    # model.load_state_dict(torch.load("checkpoints/", map_location=device))
     model.train()
+    alpha = 1
     for epoch in range(args.train.epochs):
         total_loss = 0
         print("on epoch: {}".format(epoch+1))
@@ -128,6 +137,10 @@ def main(args: DictConfig):
             event_image = batch["event_volume"].to(device) # [B, 4, 480, 640]
             ground_truth_flow = batch["flow_gt"].to(device) # [B, 2, 480, 640]
             flow = model(event_image) # [B, 2, 480, 640]
+            # l1 = torch.tensor(0., requires_grad=True)
+            # for w in model.parameters():
+            #     l1 = l1 + torch.norm(w, 1)
+            # loss: torch.Tensor = compute_epe_error(flow, ground_truth_flow) + alpha * l1
             loss: torch.Tensor = compute_epe_error(flow, ground_truth_flow)
             print(f"batch {i} loss: {loss.item()}")
             optimizer.zero_grad()
